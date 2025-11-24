@@ -1,41 +1,56 @@
-// 頁面載入時執行
+// !重要! 請將下方的網址換成你剛剛部署的 Google Apps Script 網址
+const API_URL = "https://script.google.com/macros/s/AKfycbw4kwJek0SLROc01YJD9XDlNneFUc8RHQZ94DLgLf8sNgDuADQKqxqatjR1ebjrfR68Tw/exec";
+
 document.addEventListener('DOMContentLoaded', () => {
-    // 設定預設時間為當前時間
     setDefaultTime();
-    // 載入並顯示已儲存的資料
-    renderUsageTable();
-    renderInventoryTable();
+    loadData(); // 載入資料
 });
 
-// 切換分頁功能
 function openTab(tabName) {
     const contents = document.querySelectorAll('.tab-content');
     const buttons = document.querySelectorAll('.tab-btn');
-    
-    contents.forEach(content => content.classList.remove('active'));
-    buttons.forEach(btn => btn.classList.remove('active'));
-    
+    contents.forEach(c => c.classList.remove('active'));
+    buttons.forEach(b => b.classList.remove('active'));
     document.getElementById(tabName).classList.add('active');
     event.currentTarget.classList.add('active');
 }
 
-// 設定輸入框預設為現在時間
 function setDefaultTime() {
     const now = new Date();
     now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
-    const currentDateTime = now.toISOString().slice(0, 16);
-    
-    document.getElementById('useTime').value = currentDateTime;
-    document.getElementById('invTime').value = currentDateTime;
+    document.getElementById('useTime').value = now.toISOString().slice(0, 16);
+    document.getElementById('invTime').value = now.toISOString().slice(0, 16);
 }
 
-// --- 功能 1: 處理使用紀錄 ---
+// --- 從 Google Sheets 讀取資料 ---
+function loadData() {
+    // 顯示載入中...
+    const tbodyUsage = document.querySelector('#usageTable tbody');
+    tbodyUsage.innerHTML = '<tr><td colspan="6" style="text-align:center;">資料載入中...</td></tr>';
 
+    fetch(API_URL)
+        .then(response => response.json())
+        .then(data => {
+            renderUsageTable(data.usage);
+            renderInventoryTable(data.inventory);
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            alert('讀取資料失敗，請檢查網路或 Script 網址');
+        });
+}
+
+// --- 功能 1: 送出使用紀錄 ---
 const usageForm = document.getElementById('usageForm');
 usageForm.addEventListener('submit', (e) => {
     e.preventDefault();
-    
+    const btn = usageForm.querySelector('button');
+    const originalText = btn.innerText;
+    btn.innerText = "儲存中...";
+    btn.disabled = true;
+
     const record = {
+        type: 'usage', // 告訴後端這是使用紀錄
         unit: document.getElementById('useUnit').value,
         person: document.getElementById('usePerson').value,
         time: document.getElementById('useTime').value.replace('T', ' '),
@@ -44,21 +59,70 @@ usageForm.addEventListener('submit', (e) => {
         result: document.getElementById('testResult').value
     };
 
-    // 取得舊資料，加入新資料，再存回去
-    const records = JSON.parse(localStorage.getItem('drugTest_usage')) || [];
-    records.unshift(record); // 加在最前面
-    localStorage.setItem('drugTest_usage', JSON.stringify(records));
-
-    usageForm.reset();
-    setDefaultTime();
-    renderUsageTable();
-    alert('使用紀錄已儲存！');
+    sendData(record, () => {
+        usageForm.reset();
+        setDefaultTime();
+        btn.innerText = originalText;
+        btn.disabled = false;
+        alert('使用紀錄已儲存至雲端！');
+        loadData(); // 重新讀取列表
+    });
 });
 
-function renderUsageTable() {
+// --- 功能 2: 送出入庫管理 ---
+const inventoryForm = document.getElementById('inventoryForm');
+inventoryForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const btn = inventoryForm.querySelector('button');
+    const originalText = btn.innerText;
+    btn.innerText = "儲存中...";
+    btn.disabled = true;
+
+    const item = {
+        type: 'inventory', // 告訴後端這是入庫紀錄
+        unit: document.getElementById('invUnit').value,
+        time: document.getElementById('invTime').value.replace('T', ' '),
+        batch: document.getElementById('invBatch').value,
+        qty: document.getElementById('invQty').value
+    };
+
+    sendData(item, () => {
+        inventoryForm.reset();
+        setDefaultTime();
+        btn.innerText = originalText;
+        btn.disabled = false;
+        alert('入庫資料已儲存至雲端！');
+        loadData(); // 重新讀取列表
+    });
+});
+
+// --- 共用：傳送資料到 Google Sheets ---
+function sendData(dataObj, callback) {
+    // 使用 'no-cors' 模式或是 text/plain 以避免跨域問題
+    fetch(API_URL, {
+        method: 'POST',
+        body: JSON.stringify(dataObj)
+    })
+    .then(response => response.text())
+    .then(result => {
+        callback();
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        alert('儲存失敗，請稍後再試');
+        // 即使失敗也要恢復按鈕
+        document.querySelector('.btn-submit').disabled = false;
+        document.querySelector('.btn-submit').innerText = "儲存紀錄";
+    });
+}
+
+// --- 渲染表格 ---
+function renderUsageTable(records) {
     const tbody = document.querySelector('#usageTable tbody');
-    const records = JSON.parse(localStorage.getItem('drugTest_usage')) || [];
-    
+    if(records.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;">目前無資料</td></tr>';
+        return;
+    }
     tbody.innerHTML = records.map(r => `
         <tr>
             <td>${r.time}</td>
@@ -66,38 +130,17 @@ function renderUsageTable() {
             <td>${r.person}</td>
             <td>${r.item}</td>
             <td>${r.batch}</td>
-            <td style="color: ${r.result === '陽性' ? 'red' : 'green'}">${r.result}</td>
+            <td style="font-weight:bold; color: ${r.result === '陽性' ? 'red' : 'green'}">${r.result}</td>
         </tr>
     `).join('');
 }
 
-// --- 功能 2: 處理入庫管理 ---
-
-const inventoryForm = document.getElementById('inventoryForm');
-inventoryForm.addEventListener('submit', (e) => {
-    e.preventDefault();
-
-    const item = {
-        unit: document.getElementById('invUnit').value,
-        time: document.getElementById('invTime').value.replace('T', ' '),
-        batch: document.getElementById('invBatch').value,
-        qty: document.getElementById('invQty').value
-    };
-
-    const items = JSON.parse(localStorage.getItem('drugTest_inventory')) || [];
-    items.unshift(item);
-    localStorage.setItem('drugTest_inventory', JSON.stringify(items));
-
-    inventoryForm.reset();
-    setDefaultTime();
-    renderInventoryTable();
-    alert('入庫資料已儲存！');
-});
-
-function renderInventoryTable() {
+function renderInventoryTable(items) {
     const tbody = document.querySelector('#inventoryTable tbody');
-    const items = JSON.parse(localStorage.getItem('drugTest_inventory')) || [];
-
+    if(items.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;">目前無資料</td></tr>';
+        return;
+    }
     tbody.innerHTML = items.map(i => `
         <tr>
             <td>${i.time}</td>
